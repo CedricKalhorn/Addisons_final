@@ -119,7 +119,7 @@ def classify_alert(vomit, severe_flags, temp_c, hr, systolic_bp, sali_value, tgt
 # Sidebar — profile
 # -------------------------------
 st.sidebar.header("🔧 Profiel & Instellingen")
-profile = st.sidebar.session_state.get("profile", default_profile())
+profile = st.session_state.get("profile", default_profile())
 
 profile["name"] = st.sidebar.text_input("Naam (optioneel)", value=profile.get("name",""))
 profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)", min_value=20.0, max_value=200.0, value=float(profile["weight_kg"]), step=0.5)
@@ -148,7 +148,7 @@ profile["targets_nmol"] = {
     "night": [t_n_lo, t_n_hi],
 }
 
-st.sidebar.button("Profiel opslaan (sessie)", on_click=lambda: st.sidebar.session_state.update({"profile": profile}))
+st.sidebar.button("Profiel opslaan (sessie)", on_click=lambda: st.session_state.update({"profile": profile}))
 
 # -------------------------------
 # Main — current status input
