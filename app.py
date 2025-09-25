@@ -255,8 +255,8 @@ def now_local():
     if alert_level == "RED" or vomit or cannot_tolerate_oral:
         st.markdown("### 💉 Dosisadvies (noodsituatie)")
        st.write(
-        "- **Parenterale toediening aanbevolen**: overweeg hydrocortison **100 mg IM/IV** en **zoek direct medische hulp**.",
-        "- Blijf orale tabletten vermijden totdat braken/diarree onder controle is en arts akkoord geeft."
+            "- **Parenterale toediening aanbevolen**: overweeg hydrocortison **100 mg IM/IV** en **zoek direct medische hulp**.",
+            "- Blijf orale tabletten vermijden totdat braken/diarree onder controle is en arts akkoord geeft."
         )
 
     else:
