@@ -1,21 +1,24 @@
+import math
+import json
+from datetime import datetime, timedelta, time
+import pytz
+import streamlit as st
 
-    import math
-    import json
-    from datetime import datetime, timedelta, time
-    import pytz
-    import streamlit as st
+# -------------------------------
+# App metadata & disclaimer
+# -------------------------------
+st.set_page_config(page_title="Addison Sense & Dose", page_icon="🩺", layout="wide")
+st.title("🩺 Addison Sense & Dose — Dosisadvies & Alarmmeldingen (Prototype)")
+st.caption("Educatief prototype — geen vervanging van medisch advies. Neem bij twijfel contact op met je arts / 112.")
 
-    # -------------------------------
-    # App metadata & disclaimer
-    # -------------------------------
-    st.set_page_config(page_title="Addison Sense & Dose", page_icon="🩺", layout="wide")
-    st.title("🩺 Addison Sense & Dose — Dosisadvies & Alarmmeldingen (Prototype)")
-    st.caption("Educatief prototype — geen vervanging van medisch advies. Neem bij twijfel contact op met je arts / 112.")
+# -------------------------------
+# Helpers
+# -------------------------------
+TZ = pytz.timezone("Europe/Amsterdam")
 
-    # -------------------------------
-    # Helpers
-    # -------------------------------
-    TZ = pytz.timezone("Europe/Amsterdam")
+def now_local():
+    return datetime.now(TZ)
+
 
     def now_local():
         return datetime.now(TZ)
