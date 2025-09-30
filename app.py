@@ -170,7 +170,7 @@ with colC:
     has_fever = st.checkbox("Ziek gevoel met koorts")
 
 st.write("---")
-st.subheader("Sensor — vrij cortisol (nmol/L)")
+st.subheader("Biosensor op de tand — vrij cortisol (nmol/L)")
 
 def read_sensor_file(path):
     try:
