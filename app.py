@@ -195,10 +195,10 @@ def simulate_sensor_value(now_dt: datetime, fever: bool):
 sensor_value = None
 sensor_ts = None
 
-if sensor_mode == "Lab-on-chip (bestand)":
+if sensor_mode == "Biosensor op de tand (bestand)":
     sensor_value, sensor_ts = read_sensor_file(sensor_path)
     st.caption(f"Bron: bestand • {sensor_path}")
-elif sensor_mode == "Lab-on-chip (simulatie)":
+elif sensor_mode == "Biosensor op de tand (simulatie)":
     sensor_value = simulate_sensor_value(now, has_fever)
     sensor_ts = now.isoformat()
     st.caption("Bron: simulatie (circadiaan + ruis)")
