@@ -134,10 +134,10 @@ profile["targets_nmol"] = {
 }
 
 st.sidebar.divider()
-st.sidebar.subheader("🧪 Sensorbron (Lab-on-Chip)")
+st.sidebar.subheader("🧪 Biosensor op de tand")
 sensor_mode = st.sidebar.selectbox(
     "Kies bron",
-    ["Lab-on-chip (bestand)", "Lab-on-chip (simulatie)", "Handmatig (fallback)"],
+    ["Biosensor op de tand (bestand)", "Biosensor op de tand (simulatie)", "Handmatig (error modus)"],
     index=0
 )
 sensor_path = st.sidebar.text_input("Bestandspad voor sensor.json", value="sensor.json")
