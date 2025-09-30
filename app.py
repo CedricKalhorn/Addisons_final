@@ -10,8 +10,8 @@ import random
 # App metadata & disclaimer
 # -------------------------------
 st.set_page_config(page_title="Addison Sense & Dose (Biosensor op de tand)", page_icon="🩺", layout="wide")
-st.title("🩺 Addison Sense & Dose — Lab-on-Chip cortisol (Prototype)")
-st.caption("Educatief prototype — geen vervanging van medisch advies. Neem bij twijfel contact op met je arts / 112.")
+st.title("🩺 Addison Sense & Dose — Biosensor op de tand (Prototype)")
+st.caption(" prototype — geen vervanging van medisch advies.")
 
 # -------------------------------
 # Helpers
