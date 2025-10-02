@@ -3,18 +3,17 @@ import json
 from datetime import datetime, timedelta, time
 import pytz
 import streamlit as st
-import os
 import random
 
-# -------------------------------
-# App metadata & disclaimer
-# -------------------------------
-st.set_page_config(page_title="Addison Sense & Dose (Biosensor op de tand)", page_icon="🩺", layout="wide")
-st.title("🩺 Addison Sense & Dose — Biosensor op de tand (Prototype)")
-st.caption(" prototype — geen vervanging van medisch advies.")
+# =========================================================
+# Addison Sense & Dose — Wearable vitals (smartwatch/polsband)
+# =========================================================
+st.set_page_config(page_title="Addison Sense & Dose (Wearable)", page_icon="⌚", layout="wide")
+st.title("⌚ Addison Sense & Dose — Wearable vitals (Prototype)")
+st.caption("Educatief prototype — geen vervanging van medisch advies. Volg je noodplan en artsadvies.")
 
 # -------------------------------
-# Helpers
+# Helpers / tijdzone
 # -------------------------------
 TZ = pytz.timezone("Europe/Amsterdam")
 
@@ -33,14 +32,15 @@ def default_profile():
     return {
         "name": "",
         "weight_kg": 75.0,
-        "daily_hc_mg": 20.0,
-        "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],
+        "daily_hc_mg": 20.0,                       # gebruikelijke totale dagdosis
+        "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],  # "HH:MM mg"
         "wakeup_time": "07:30",
-        "targets_nmol": {
-            "morning": [12, 25],
-            "afternoon": [5, 12],
-            "evening": [2, 7],
-            "night": [0.5, 4]
+        # Doelbereiken voor "verwachte belasting" op basis van dagdeel (kan gebruiken voor future features)
+        "targets_info": {
+            "morning": "Hoger energieverbruik normaal; hogere drempel voor alarm",
+            "afternoon":"Neutraal",
+            "evening":"Lagere drempel voor alarmering bij aanhoudende stresssignalen",
+            "night":"Tijdens slaap: HR laag, HRV hoger; kleine afwijking is al verdacht"
         }
     }
 
@@ -53,97 +53,197 @@ def time_of_day_bucket(t: time):
         return "evening"
     return "night"
 
-def sick_day_factor(temp_c: float, hr: int, has_fever: bool, severe: bool):
-    if severe:
+# -------------------------------
+# Wearable-bestand inlezen / simuleren
+# -------------------------------
+def read_vitals_json(path):
+    """
+    Verwacht JSON met velden:
+    {
+      "timestamp": "2025-10-02T09:12:00+02:00",
+      "hr_bpm": 104,
+      "hrv_rmssd_ms": 18,
+      "wrist_temp_dev_c": 0.9,   # afwijking t.o.v. persoonlijke baseline
+      "resp_bpm": 17,
+      "spo2_pct": 97,
+      "sbp": null                 # optioneel (systolische BP, als je wearable/databron dat heeft)
+    }
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return {
+            "ts": d.get("timestamp"),
+            "hr": d.get("hr_bpm"),
+            "hrv": d.get("hrv_rmssd_ms"),
+            "temp_dev": d.get("wrist_temp_dev_c"),
+            "resp": d.get("resp_bpm"),
+            "spo2": d.get("spo2_pct"),
+            "sbp": d.get("sbp"),
+        }
+    except Exception:
+        return None
+
+def simulate_vitals(now_dt: datetime):
+    """Eenvoudige simulatie met circadiaan ritme + ruis."""
+    hour = now_dt.hour + now_dt.minute/60.0
+    # HR: iets hoger overdag (workload), lager 's nachts
+    hr_base = 60 + 15 * math.exp(-((hour-15.0)/5.0)**2)   # middag hoger
+    hr_noise = random.uniform(-5, 8)
+    hr = max(45, hr_base + hr_noise)
+
+    # HRV: omgekeerd gedrag: hoger 's nachts, lager bij stress
+    hrv_base = 35 + 20 * math.exp(-((hour-3.0)/5.0)**2)   # nacht hoger
+    hrv_noise = random.uniform(-8, 6)
+    hrv = max(5, hrv_base + hrv_noise)
+
+    # Polstemperatuur-deviatie: normaal ~0, bij koorts/stress omhoog
+    temp_dev = max(0.0, random.gauss(0.2, 0.15)) if 6 <= hour <= 23 else max(0.0, random.gauss(0.1, 0.1))
+    # Kleinere kans op “koorts-episode”
+    if random.random() < 0.05:
+        temp_dev += random.uniform(0.5, 1.0)  # koortsachtig
+
+    resp = max(10, random.gauss(15, 2))
+    spo2 = min(100, max(93, random.gauss(97.5, 1.0)))
+    # sbp optioneel (wearables schatten zelden betrouwbaar); laat op None
+    return {
+        "ts": now_dt.isoformat(),
+        "hr": int(hr),
+        "hrv": int(hrv),
+        "temp_dev": round(temp_dev, 2),
+        "resp": int(resp),
+        "spo2": int(spo2),
+        "sbp": None
+    }
+
+# -------------------------------
+# Stressindex & beslislogica
+# -------------------------------
+def compute_stress_index(vitals, base_hr, base_hr_sd, base_temp_dev):
+    """
+    Simpele 0–100 score uit HR↑, temp_dev↑ en HRV↓.
+    - HR z-score tov baseline (alleen verhoging telt)
+    - Temp_dev boven baseline
+    - HRV < 20 ms geeft extra punten
+    """
+    if not vitals:
+        return 0.0, []
+
+    score = 0.0
+    parts = []
+
+    # HR-component
+    hr = vitals.get("hr")
+    if hr is not None and base_hr_sd > 0:
+        hr_z = (hr - base_hr) / base_hr_sd
+        hr_z = max(0.0, hr_z)
+        score += min(hr_z * 15, 40)  # max 40 punten uit HR
+        parts.append(f"HR↑ (z≈{hr_z:.1f})")
+
+    # Temp_dev component
+    tdev = vitals.get("temp_dev")
+    if tdev is not None:
+        # elke +0.5°C boven baseline ~20 punten
+        sc = max(0.0, (tdev - base_temp_dev)) * 40
+        sc = min(sc, 40)
+        score += sc
+        parts.append(f"TempΔ {tdev:+.1f}°C")
+
+    # HRV component (lager = stress)
+    hrv = vitals.get("hrv")
+    if hrv is not None and hrv < 20:
+        score += 10
+        parts.append("HRV↓")
+
+    score = max(0.0, min(100.0, score))
+    return score, parts
+
+def classify_alert(vomit, severe_flags, vitals, stress_index):
+    """Combineer RED-flags + wearable stress tot GREEN/AMBER/RED + redenen."""
+    reasons = []
+    level = "GREEN"
+
+    # RED flags (klinisch)
+    if vomit or severe_flags.get("persistent_diarrhea") or severe_flags.get("cannot_tolerate_oral"):
+        level = "RED"; reasons.append("Geen betrouwbare orale opname (braken/diarree).")
+    if severe_flags.get("syncope_confusion") or severe_flags.get("very_low_bp"):
+        level = "RED"; reasons.append("Ernstige klachten (syncope/verwardheid/hypotensie).")
+
+    # AMBER door vitals / stressindex (alleen als nog niet RED)
+    if level != "RED" and vitals:
+        hr = vitals.get("hr")
+        sbp = vitals.get("sbp")
+        tdev = vitals.get("temp_dev")
+
+        if stress_index >= 50:
+            level = "AMBER"; reasons.append(f"Wearable stressindex {int(stress_index)} (≥50).")
+
+        if hr is not None and hr >= 100:
+            level = "AMBER"; reasons.append(f"Tachycardie (HR {hr}).")
+
+        # Systolische BP (indien beschikbaar uit bron)
+        if sbp is not None and sbp < 100:
+            level = "AMBER"; reasons.append(f"Lage systolische BP ({sbp} mmHg).")
+
+        # Polstemperatuur-afwijking als koorts-proxy
+        if tdev is not None and tdev >= 0.8:
+            level = "AMBER"; reasons.append(f"Koortsverdenking (TempΔ +{tdev:.1f} °C).")
+
+    return level, reasons
+
+def sick_day_factor_from_wearable(vitals, stress_index, red: bool):
+    """Heuristische factor (×1, ×2, ×3) op basis van wearable-signalen."""
+    if red:  # handled upstream: parenterale route
         return 0.0
-    if has_fever or (temp_c is not None and temp_c >= 38.0):
-        if temp_c is not None and temp_c >= 39.0:
-            return 3.0
-        return 2.0
-    if hr is not None and hr >= 100:
+    if not vitals:
+        return 1.0
+    hr = vitals.get("hr")
+    tdev = vitals.get("temp_dev")
+
+    # sterk verhoogde stress
+    if (tdev is not None and tdev >= 1.0) or stress_index >= 70 or (hr is not None and hr >= 110):
+        return 3.0
+    # matig verhoogde stress
+    if (tdev is not None and tdev >= 0.6) or stress_index >= 50 or (hr is not None and hr >= 100):
         return 2.0
     return 1.0
 
-def pk_predict_conc(last_doses, t_eval, ka=1.8, ke=math.log(2)/1.7, Vd=35.0):
-    conc = 0.0
-    for t_admin, dose in last_doses:
-        dt = (t_eval - t_admin).total_seconds()/3600.0
-        if dt <= 0:
-            continue
-        try:
-            term = (dose * ka)/(Vd*(ka - ke)) * (math.exp(-ke*dt) - math.exp(-ka*dt))
-        except ZeroDivisionError:
-            term = 0.0
-        conc += max(term, 0.0)
-    return conc
-
-def classify_alert(vomit, severe_flags, temp_c, hr, systolic_bp, sensor_value, tgt_range):
-    reasons = []
-    level = "GREEN"
-    if vomit or severe_flags.get("persistent_diarrhea") or severe_flags.get("cannot_tolerate_oral"):
-        level = "RED"
-        reasons.append("Geen betrouwbare orale opname (braken/diarree).")
-    if severe_flags.get("syncope_confusion") or severe_flags.get("very_low_bp"):
-        level = "RED"
-        reasons.append("Ernstige klachten (syncope/verwardheid/hypotensie).")
-    if level != "RED":
-        if (temp_c is not None and temp_c >= 38.0) or (hr is not None and hr >= 100):
-            level = "AMBER"
-            if temp_c is not None and temp_c >= 38.0:
-                reasons.append(f"Koorts {temp_c:.1f} °C.")
-            if hr is not None and hr >= 100:
-                reasons.append(f"Tachycardie (HR {hr}).")
-        if sensor_value is not None and tgt_range is not None:
-            low, high = tgt_range
-            if sensor_value < low:
-                level = "AMBER" if level != "RED" else level
-                reasons.append(f"Sensor onder doel ({sensor_value:.1f} < {low:.1f} nmol/L).")
-    return level, reasons
-
 # -------------------------------
-# Sidebar — profile & sensor setup
+# Sidebar — Profiel & Wearable
 # -------------------------------
 st.sidebar.header("🔧 Profiel & Instellingen")
 profile = st.session_state.get("profile", default_profile())
 
 profile["name"] = st.sidebar.text_input("Naam (optioneel)", value=profile.get("name",""))
-profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)", min_value=20.0, max_value=200.0, value=float(profile["weight_kg"]), step=0.5)
-profile["daily_hc_mg"] = st.sidebar.number_input("Gebruikelijke hydrocortison dagdosis (mg/dag)", min_value=5.0, max_value=60.0, value=float(profile["daily_hc_mg"]), step=2.5)
+profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)", min_value=20.0, max_value=200.0,
+                                               value=float(profile["weight_kg"]), step=0.5)
+profile["daily_hc_mg"] = st.sidebar.number_input("Gebruikelijke hydrocortison dagdosis (mg/dag)", min_value=5.0,
+                                                 max_value=60.0, value=float(profile["daily_hc_mg"]), step=2.5)
 
 st.sidebar.markdown("**Gebruikelijke dosering (tijd en mg, één per regel)** — bv: `08:00 10`")
 schedule_str = st.sidebar.text_area("Schema", value="\n".join(profile["usual_schedule"]), height=100)
 profile["usual_schedule"] = [s.strip() for s in schedule_str.splitlines() if s.strip()]
-
 profile["wakeup_time"] = st.sidebar.text_input("Wektijd (HH:MM)", value=profile["wakeup_time"])
 
-st.sidebar.markdown("**Doelbereiken sensor (nmol/L) — personaliseer**")
-cols = st.sidebar.columns(2)
-t_m_lo = cols[0].number_input("Ochtend min", value=float(profile["targets_nmol"]["morning"][0]), step=0.5)
-t_m_hi = cols[1].number_input("Ochtend max", value=float(profile["targets_nmol"]["morning"][1]), step=0.5)
-t_a_lo = cols[0].number_input("Middag min", value=float(profile["targets_nmol"]["afternoon"][0]), step=0.5)
-t_a_hi = cols[1].number_input("Middag max", value=float(profile["targets_nmol"]["afternoon"][1]), step=0.5)
-t_e_lo = cols[0].number_input("Avond min", value=float(profile["targets_nmol"]["evening"][0]), step=0.5)
-t_e_hi = cols[1].number_input("Avond max", value=float(profile["targets_nmol"]["evening"][1]), step=0.5)
-t_n_lo = cols[0].number_input("Nacht min", value=float(profile["targets_nmol"]["night"][0]), step=0.5)
-t_n_hi = cols[1].number_input("Nacht max", value=float(profile["targets_nmol"]["night"][1]), step=0.5)
-profile["targets_nmol"] = {
-    "morning": [t_m_lo, t_m_hi],
-    "afternoon": [t_a_lo, t_a_hi],
-    "evening": [t_e_lo, t_e_hi],
-    "night": [t_n_lo, t_n_hi],
-}
+st.sidebar.divider()
+st.sidebar.subheader("⌚ Wearable koppeling")
+use_wearable = st.sidebar.checkbox("Vitals automatisch inladen van wearable", value=True)
+vitals_path = st.sidebar.text_input("Pad naar vitals.json", value="vitals.json")
+# Persoonlijke baselines (kun je later automatisch leren; nu handmatig instelbaar)
+base_hr = st.sidebar.number_input("Baseline HR (bpm)", 40, 120, 70, 1)
+base_hr_sd = st.sidebar.number_input("HR SD (bpm)", 1, 30, 8, 1)
+base_temp_dev = st.sidebar.number_input("Baseline temp. dev (°C)", -1.0, 1.0, 0.0, 0.1)
 
 st.sidebar.divider()
-st.sidebar.subheader("🧪 Biosensor op de tand")
-sensor_mode = st.sidebar.selectbox(
-    "Kies bron",
-    ["Biosensor op de tand (bestand)", "Biosensor op de tand (simulatie)", "Handmatig (error modus)"],
-    index=0
-)
-sensor_path = st.sidebar.text_input("Bestandspad voor sensor.json", value="sensor.json")
+st.sidebar.subheader("⚗️ PK-instellingen (optioneel)")
+t_half_h = st.sidebar.slider("t½ eliminatie (uur)", 0.8, 3.0, 1.7, 0.1)
+ka_h     = st.sidebar.slider("Ka absorptie (1/uur)", 0.5, 3.0, 1.8, 0.1)
+use_schedule_as_taken = st.sidebar.checkbox("Gebruik gebruikelijke schema-doses (vóór nu) automatisch", True)
+
+st.sidebar.button("Profiel opslaan (sessie)", on_click=lambda: st.session_state.update({"profile": profile}))
 
 # -------------------------------
-# Main — current status input
+# Huidige status & symptomen
 # -------------------------------
 st.subheader("Huidige status")
 colA, colB, colC = st.columns(3)
@@ -156,71 +256,69 @@ with colA:
     additional_recent = st.text_input("Extra recente innames (optioneel, CSV: 'HH:MM mg; HH:MM mg')", value="")
 
 with colB:
-    temp_c = st.number_input("Lichaamstemperatuur (°C)", min_value=34.0, max_value=42.5, value=37.0, step=0.1)
-    hr = st.number_input("Hartslag (bpm)", min_value=30, max_value=220, value=70, step=1)
-    sbp = st.number_input("Systolische bloeddruk (mmHg) (optioneel)", min_value=60, max_value=220, value=120, step=1)
+    st.write("Wearable vitals")
+    if use_wearable:
+        vitals = read_vitals_json(vitals_path)
+        if not vitals:
+            st.warning("Geen vitals.json gevonden of niet leesbaar — schakel simulatie of voer handmatig in.")
+    else:
+        vitals = None
+    # Simulatie toggle (handig voor demo)
+    simulate = st.checkbox("Simuleer vitals (overschrijft wearable)", value=False)
+    if simulate:
+        vitals = simulate_vitals(now)
 
 with colC:
-    st.write("Symptomen")
-    vomit = st.checkbox("Braken of niet kunnen binnenhouden")
+    st.write("Symptomen / RED flags")
+    vomit = st.checkbox("Braken of niet binnenhouden")
     persistent_diarrhea = st.checkbox("Aanhoudende diarree")
     cannot_tolerate_oral = st.checkbox("Orale inname niet mogelijk")
     syncope_confusion = st.checkbox("Flauwvallen / verwardheid")
     very_low_bp = st.checkbox("Erg lage bloeddruk / ernstige zwakte")
-    has_fever = st.checkbox("Ziek gevoel met koorts")
 
+# Toon vitals / stressindex
 st.write("---")
-st.subheader("Biosensor op de tand — vrij cortisol (nmol/L)")
-
-def read_sensor_file(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        val = float(d.get("free_cortisol_nmol", None))
-        ts = d.get("timestamp", None)
-        return val, ts
-    except Exception:
-        return None, None
-
-def simulate_sensor_value(now_dt: datetime, fever: bool):
-    hour = now_dt.hour + now_dt.minute/60.0
-    baseline = 6 + 10 * math.exp(-((hour-8.0)/3.0)**2)
-    trough = 2.0 + 1.0 * math.exp(-((hour-23.0)/3.0)**2)
-    value = max(trough, baseline)
-    if fever:
-        value *= 1.2
-    noise = random.uniform(-1.0, 1.0)
-    return max(0.0, value + noise)
-
-sensor_value = None
-sensor_ts = None
-
-if sensor_mode == "Biosensor op de tand (bestand)":
-    sensor_value, sensor_ts = read_sensor_file(sensor_path)
-    st.caption(f"Bron: bestand • {sensor_path}")
-elif sensor_mode == "Biosensor op de tand (simulatie)":
-    sensor_value = simulate_sensor_value(now, has_fever)
-    sensor_ts = now.isoformat()
-    st.caption("Bron: simulatie (circadiaan + ruis)")
+st.subheader("⌚ Wearable-overzicht")
+if vitals:
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("HR (bpm)", f"{vitals.get('hr','–')}")
+    c2.metric("HRV (RMSSD, ms)", f"{vitals.get('hrv','–')}")
+    c3.metric("Temp Δ (°C)", f"{vitals.get('temp_dev','–')}")
+    c4.metric("Ademfreq (bpm)", f"{vitals.get('resp','–')}")
+    c5.metric("SpO₂ (%)", f"{vitals.get('spo2','–')}")
+    c6.metric("Sys BP (mmHg)", f"{vitals.get('sbp','–')}")
+    st.caption(f"Laatst gemeten: {vitals.get('ts','onbekend')}")
 else:
-    sensor_value = st.number_input("Handmatige invoer (nmol/L)", min_value=0.0, max_value=200.0, value=0.0, step=0.5)
-    sensor_ts = now.isoformat()
-    st.caption("Bron: handmatig")
+    st.info("Geen wearable-data → voer simulatie in of lever een vitals.json aan.")
 
-if sensor_value is not None:
-    st.metric("Vrij cortisol (nmol/L)", f"{sensor_value:.1f}", help=f"Laatste meting: {sensor_ts}")
+# Stressindex berekenen
+stress_index, stress_parts = compute_stress_index(vitals, base_hr, base_hr_sd, base_temp_dev)
+st.metric("Stressindex (0–100)", int(stress_index))
+if stress_parts:
+    st.caption("Componenten: " + ", ".join(stress_parts))
 
-# Determine target range by current time of day
-bucket = time_of_day_bucket(now.time())
-tgt_range = profile["targets_nmol"][bucket]
-st.info(f"Doelbereik ({bucket}): {tgt_range[0]:.1f}–{tgt_range[1]:.1f} nmol/L (instelbaar in de zijbalk)")
+# -------------------------------
+# PK (optioneel, voor context) — eenvoudige Bateman-functie
+# -------------------------------
+def pk_predict_conc(last_doses, t_eval, ka, t_half, Vd=35.0):
+    ke = math.log(2)/t_half
+    conc = 0.0
+    for t_admin, dose in last_doses:
+        dt = (t_eval - t_admin).total_seconds()/3600.0
+        if dt <= 0:
+            continue
+        if abs(ka - ke) < 1e-6:
+            continue
+        term = (dose * ka) / (Vd * (ka - ke)) * (math.exp(-ke*dt) - math.exp(-ka*dt))
+        conc += max(term, 0.0)
+    return conc
 
 # Build list of doses for PK
 last_doses = []
 today = now.date()
 dt_last = datetime.combine(today, last_dose_time).replace(tzinfo=TZ)
 if dt_last <= now and last_dose_mg > 0:
-    last_doses.append((dt_last, last_dose_mg))
+    last_doses.append((dt_last, float(last_dose_mg)))
 
 if additional_recent.strip():
     for chunk in additional_recent.split(";"):
@@ -238,17 +336,52 @@ if additional_recent.strip():
         except Exception:
             st.warning(f"Kon invoer niet parsen: '{chunk}' (verwacht 'HH:MM mg')")
 
-# Compute simple PK trend (arbitrary units)
-conc_now = pk_predict_conc(last_doses, now)
-conc_in_1h = pk_predict_conc(last_doses, now + timedelta(hours=1))
-conc_in_2h = pk_predict_conc(last_doses, now + timedelta(hours=2))
+if use_schedule_as_taken:
+    for line in profile["usual_schedule"]:
+        try:
+            tstr, mgstr = line.split()
+            ti = parse_time_str(tstr)
+            mg = float(mgstr)
+            if ti:
+                dt_sched = datetime.combine(today, ti).replace(tzinfo=TZ)
+                if dt_sched <= now and mg > 0:
+                    last_doses.append((dt_sched, mg))
+        except Exception:
+            pass
+
+# optioneel: laatste avonddosis van gisteren meenemen (staart)
+try:
+    last_evening_candidates = []
+    for line in profile["usual_schedule"]:
+        tstr, mgstr = line.split()
+        ti = parse_time_str(tstr)
+        mg = float(mgstr)
+        if ti and ti >= time(17,0):
+            last_evening_candidates.append((ti, mg))
+    if last_evening_candidates:
+        ti_e, mg_e = sorted(last_evening_candidates)[-1]
+        dt_yesterday = datetime.combine(today - timedelta(days=1), ti_e).replace(tzinfo=TZ)
+        if (now - dt_yesterday).total_seconds()/3600.0 < 12:
+            last_doses.append((dt_yesterday, mg_e))
+except Exception:
+    pass
+
+conc_now = pk_predict_conc(last_doses, now, ka=ka_h, t_half=t_half_h)
+conc_in_1h = pk_predict_conc(last_doses, now + timedelta(hours=1), ka=ka_h, t_half=t_half_h)
+conc_in_2h = pk_predict_conc(last_doses, now + timedelta(hours=2), ka=ka_h, t_half=t_half_h)
 
 with st.expander("📈 Interne PK-schatting (relatieve conc.)"):
-    st.write({"nu": round(conc_now,3), "+1h": round(conc_in_1h,3), "+2h": round(conc_in_2h,3)})
-    st.caption("Relatieve eenheden — bedoeld voor trend, niet voor absolute diagnose.")
+    st.write({
+        "nu": round(conc_now, 3),
+        "+1h": round(conc_in_1h, 3),
+        "+2h": round(conc_in_2h, 3),
+        "Ka (1/h)": round(ka_h, 2),
+        "t½ (h)": round(t_half_h, 2)
+    })
+    st.caption("Relatieve eenheden; trendmodel voor context bij dosisbesluiten.")
 
 # -------------------------------
-# Decision logic
+# Alarmstatus + dosisadvies
 # -------------------------------
 severe_flags = {
     "persistent_diarrhea": persistent_diarrhea,
@@ -257,7 +390,7 @@ severe_flags = {
     "very_low_bp": very_low_bp,
 }
 
-alert_level, reasons = classify_alert(vomit, severe_flags, temp_c, hr, sbp, sensor_value, tuple(tgt_range))
+alert_level, reasons = classify_alert(vomit, severe_flags, vitals, stress_index)
 
 st.subheader("🔔 Alarmstatus")
 if alert_level == "RED":
@@ -270,44 +403,41 @@ else:
 if reasons:
     st.write("**Redenen:** " + " ".join([f"• {r}" for r in reasons]))
 
-# Dosing suggestion
-factor = sick_day_factor(temp_c, hr, has_fever, (alert_level=="RED"))
+# Dosisadvies op basis van wearable
 usual_daily = profile["daily_hc_mg"]
+factor = sick_day_factor_from_wearable(vitals, stress_index, red=(alert_level=="RED"))
 
-if alert_level == "RED" or vomit or cannot_tolerate_oral:
+if alert_level == "RED":
     st.markdown("### 💉 Dosisadvies (noodsituatie)")
     st.write(
         "- **Parenterale toediening aanbevolen**: overweeg hydrocortison **100 mg IM/IV** en **zoek direct medische hulp**.",
-        "- Blijf orale tabletten vermijden totdat braken/diarree onder controle is en arts akkoord geeft."
+        "- Vermijd orale tabletten tot klachten (braken/diarree) onder controle zijn en arts akkoord geeft."
     )
 else:
     st.markdown("### 💊 Dosisadvies (oraal)")
     if factor <= 1.0:
-        st.write("**Geen extra stressdosis** nodig op basis van huidige gegevens. Blijf monitoren en volg je gebruikelijke schema.")
+        st.write("**Geen extra stressdosis** nodig op basis van huidige wearable-gegevens. Blijf monitoren en volg je gebruikelijke schema.")
     else:
         extra_today = (factor - 1.0) * usual_daily
+        # onmiddellijke bolus om binnen ~60–90 min te corrigeren
         immediate_bolus = min(20.0, max(5.0, round(0.4 * extra_today / 2.5) * 2.5))
         follow_up = max(0.0, extra_today - immediate_bolus)
-        st.write(f"- Aanbevolen **stressfactor**: ×{factor:.1f} (t.o.v. je gebruikelijke dagdosis {usual_daily:.1f} mg).")
+        st.write(f"- Aanbevolen **stressfactor**: ×{factor:.1f} (t.o.v. je dagdosis {usual_daily:.1f} mg).")
         st.write(f"- **Neem nu**: **{immediate_bolus:.1f} mg** hydrocortison.")
         if follow_up > 0:
             st.write(f"- **Rest van extra dosis vandaag**: **{follow_up:.1f} mg** verspreid over de dag.")
-        st.caption("Heuristische verdeling — pas aan op artsadvies en persoonlijke ervaring.")
+        st.caption("Heuristische verdeling — personaliseer met je arts en ervaring.")
 
-    if sensor_value is not None:
-        low, high = tgt_range
-        if sensor_value < low:
-            st.info("Sensorsignaal ligt **onder** doel. Hercontroleer over 60–90 min na inname.")
-        elif sensor_value > high:
-            st.info("Sensorsignaal is **boven** doelbereik; overleg met je arts bij aanhoudend hoge waarden.")
-
+# -------------------------------
+# Logboek
+# -------------------------------
 st.write("---")
 st.subheader("📒 Logboek (sessie)")
 if "events" not in st.session_state:
     st.session_state["events"] = []
 
 if st.button("✚ Log: advies toevoegen aan logboek"):
-    dose_text = "IM/IV 100 mg (RED)" if alert_level=="RED" or vomit or cannot_tolerate_oral else "Geen extra dosis"
+    dose_text = "IM/IV 100 mg (RED)" if alert_level=="RED" else "Geen extra dosis"
     try:
         immediate_bolus
     except NameError:
@@ -316,15 +446,17 @@ if st.button("✚ Log: advies toevoegen aan logboek"):
         follow_up
     except NameError:
         follow_up = 0.0
-    if alert_level != "RED" and not (vomit or cannot_tolerate_oral) and factor>1.0:
+    if alert_level != "RED" and factor > 1.0:
         dose_text = f"Orale bolus nu: {immediate_bolus:.1f} mg; rest vandaag: {max(0.0, follow_up):.1f} mg"
 
     event = {
         "time": now.strftime("%Y-%m-%d %H:%M"),
         "alert": alert_level,
-        "temp": temp_c,
-        "hr": int(hr),
-        "sensor": None if sensor_value is None else round(float(sensor_value),1),
+        "stress_index": int(stress_index),
+        "hr": None if not vitals else vitals.get("hr"),
+        "hrv": None if not vitals else vitals.get("hrv"),
+        "temp_dev": None if not vitals else vitals.get("temp_dev"),
+        "sbp": None if not vitals else vitals.get("sbp"),
         "dose_advice": dose_text,
         "reasons": reasons,
     }
@@ -334,4 +466,4 @@ if st.session_state["events"]:
     st.table(st.session_state["events"])
 
 st.write("---")
-st.caption("⚠️ Disclaimer: Dit is een educatief hulpmiddel. Het geeft geen medisch advies. Volg altijd je persoonlijke noodplan en de instructies van je behandelaar.")
+st.caption("⚠️ Disclaimer: Dit is een educatief hulpmiddel. Geen medisch advies. Volg altijd je persoonlijke noodplan en de instructies van je behandelaar.")
