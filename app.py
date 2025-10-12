@@ -24,33 +24,36 @@ def now_local(): return datetime.now(TZ)
 # PROFIEL
 # ------------------------------------
 @st.cache_data(show_spinner=False)
-# ---- veilige initialisatie van het profiel ----
-for key, default in {
-    "name": "",
-    "weight_kg": 75.0,
-    "daily_hc_mg": 20.0,
-    "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],
-    "baseline_glucose": 5.5,
-    "baseline_sd": 0.4
-}.items():
+def default_profile():
+    return {
+        "name": "",
+        "weight_kg": 75.0,
+        "daily_hc_mg": 20.0,
+        "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],
+        "baseline_glucose": 5.5,
+        "baseline_sd": 0.4
+    }
+
+profile = st.session_state.get("profile", default_profile())
+
+# --- veilige initialisatie van keys (tegen KeyError) ---
+for key, default in default_profile().items():
     if key not in profile:
         profile[key] = default
 
-    
-profile = st.session_state.get("profile", default_profile())
+# --- Sidebar profiel ---
 st.sidebar.header("👤 Profiel")
 profile["name"] = st.sidebar.text_input("Naam", value=profile.get("name",""))
-profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)",20.0,200.0,profile["weight_kg"],0.5)
-profile["daily_hc_mg"] = st.sidebar.number_input("Dagelijkse hydrocortison (mg)",5.0,60.0,profile["daily_hc_mg"],2.5)
-profile["baseline_glucose"] = st.sidebar.number_input("Basale glucose (mmol/L)",3.0,10.0,profile["baseline_glucose"],0.1)
-profile["baseline_sd"] = st.sidebar.number_input("SD glucose (mmol/L)",0.1,2.0,profile["baseline_sd"],0.1)
+profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)",20.0,200.0,float(profile["weight_kg"]),0.5)
+profile["daily_hc_mg"] = st.sidebar.number_input("Dagelijkse hydrocortison (mg)",5.0,60.0,float(profile["daily_hc_mg"]),2.5)
+profile["baseline_glucose"] = st.sidebar.number_input("Basale glucose (mmol/L)",3.0,10.0,float(profile["baseline_glucose"]),0.1)
+profile["baseline_sd"] = st.sidebar.number_input("SD glucose (mmol/L)",0.1,2.0,float(profile["baseline_sd"]),0.1)
 st.sidebar.button("Opslaan in sessie",on_click=lambda: st.session_state.update({"profile":profile}))
 
 # ------------------------------------
 # GLUCOSE INVOER / SIMULATIE
 # ------------------------------------
 def read_glucose_json(path:str):
-    """JSON: {"timestamp":"2025-10-12T09:30:00+02:00","glucose_mmol":5.6}"""
     try:
         with open(path,"r",encoding="utf-8") as f:
             d=json.load(f)
@@ -91,7 +94,6 @@ st.caption(f"Laatste meting: {data['ts']}")
 # GLUCOSE ANALYSE
 # ------------------------------------
 def classify_glucose(glu:float, base:float, sd:float):
-    """EU clinical guidance: target 4.0–7.8 mmol/L (ISO 15197 / EASD 2023)"""
     if glu < 3.5:
         return "RED","Hypoglycemie – risico op Addison’s crisis door tekort aan cortisol."
     elif glu < 4.5:
@@ -151,7 +153,6 @@ else:
 # ------------------------------------
 st.subheader("📈 Dagelijkse trends (simulatie)")
 
-# Simuleer 24h glucose + hydrocortisonprofiel
 times=[datetime.combine(today,time(0,0,tzinfo=TZ))+timedelta(minutes=15*i) for i in range(96)]
 hc_conc=[]; glu=[]
 for t in times:
@@ -162,7 +163,6 @@ for t in times:
     glu.append(max(2.5,round(g,2)))
 df=pd.DataFrame({"tijd":times,"glucose":glu,"hydrocortison":hc_conc})
 
-# Plotly grafiek
 fig=go.Figure()
 fig.add_trace(go.Scatter(x=df["tijd"],y=df["glucose"],mode="lines",name="Glucose (mmol/L)",line=dict(color="royalblue")))
 fig.add_hrect(y0=4,y1=8,fillcolor="green",opacity=0.1,line_width=0)
