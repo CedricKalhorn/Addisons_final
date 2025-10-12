@@ -33,6 +33,18 @@ def default_profile():
         "baseline_glucose": 5.5,
         "baseline_sd": 0.4
     }
+    
+# Zorg dat alle keys bestaan (compatibel met oude sessies)
+for key, default in {
+    "name": "",
+    "weight_kg": 75.0,
+    "daily_hc_mg": 20.0,
+    "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],
+    "baseline_glucose": 5.5,
+    "baseline_sd": 0.4
+}.items():
+    if key not in profile:
+        profile[key] = default
 
 profile = st.session_state.get("profile", default_profile())
 st.sidebar.header("👤 Profiel")
