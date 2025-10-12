@@ -8,7 +8,7 @@ import math, random, json
 from datetime import datetime, timedelta, time
 import pytz, streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 # ------------------------------------
 # CONFIG
@@ -72,25 +72,34 @@ df=pd.DataFrame({"tijd":times,"glucose":glu,"hydrocortison":hc_conc})
 # GRAFIEKEN
 # ------------------------------------
 st.subheader("📈 Dagelijkse trends")
-fig, (ax1, ax2) = plt.subplots(2,1,figsize=(8,6),sharex=True)
+fig = go.Figure()
 
 # Glucose
-ax1.plot(df["tijd"],df["glucose"],label="Glucose (mmol/L)")
-ax1.axhspan(4,8,color="green",alpha=0.1,label="Doelbereik 4–8 mmol/L")
-ax1.set_ylabel("Glucose (mmol/L)")
-ax1.legend(loc="upper right")
-ax1.grid(True,alpha=0.3)
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["glucose"],
+    mode="lines", name="Glucose (mmol/L)",
+    line=dict(color="royalblue")
+))
+fig.add_hrect(y0=4, y1=8, fillcolor="green", opacity=0.1, line_width=0)
 
 # Hydrocortison
-ax2.plot(df["tijd"],df["hydrocortison"],color="orange",label="Hydrocortison (rel.)")
-for t,mg in doses:
-    ax2.axvline(t,color="gray",linestyle="--",alpha=0.3)
-ax2.set_ylabel("Relatieve [HC]")
-ax2.set_xlabel("Tijd (vandaag)")
-ax2.legend(loc="upper right")
-ax2.grid(True,alpha=0.3)
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["hydrocortison"],
+    mode="lines", name="Hydrocortison (rel.)",
+    yaxis="y2", line=dict(color="orange")
+))
 
-st.pyplot(fig)
+# Twee y-assen
+fig.update_layout(
+    xaxis_title="Tijd",
+    yaxis=dict(title="Glucose (mmol/L)", range=[2,12]),
+    yaxis2=dict(title="Relatieve [HC]", overlaying="y", side="right"),
+    title="Dagelijkse glucose- en hydrocortisontrends",
+    legend=dict(x=0.01, y=0.99)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
 
 # ------------------------------------
 # HUIDIGE STATUS & ADVIES
