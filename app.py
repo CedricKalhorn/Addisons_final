@@ -27,8 +27,8 @@ def now_local(): return datetime.now(TZ)
 def default_profile():
     return {
         "name": "",
-        "weight_kg": 75.0,
-        "daily_hc_mg": 20.0,
+        "weight_kg": "",
+        "daily_hc_mg": "",
         "usual_schedule": ["08:00 10", "14:00 5", "18:00 5"],
         "baseline_glucose": 5.5,
         "baseline_sd": 0.4
