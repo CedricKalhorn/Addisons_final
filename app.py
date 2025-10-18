@@ -155,51 +155,71 @@ else:
 # DAGELIJKSE TRENDGRAFIEK
 # ------------------------------------
 st.subheader("📈 Dagelijkse trends (simulatie)")
-times=[datetime.combine(today,time(0,0,tzinfo=TZ))+timedelta(minutes=15*i) for i in range(96)]
-hc_conc=[]; glu=[]; hrv_list=[]; eda_list=[]; stress_list=[]
-for t in times:
-    c=pk_predict_conc(doses,t,ka,t_half)
-    hc_conc.append(c)
-    # simulatie glucose/hrv/eda
-    sim=simulate_wearables(t)
-    glu.append(sim["glucose"]); hrv_list.append(sim["hrv"]); eda_list.append(sim["eda"])
-    s,_=compute_stress_index(sim["glucose"],sim["hrv"],sim["eda"],profile["baseline_glucose"],profile["baseline_sd"])
-    stress_list.append(s)
-df=pd.DataFrame({"tijd":times,"glucose":glu,"hrv":hrv_list,"eda":eda_list,"stress":stress_list,"hydrocortison":hc_conc})
 
-fig=go.Figure()
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["glucose"],mode="lines",name="Glucose (mmol/L)",line=dict(color="royalblue")))
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["hrv"],mode="lines",name="HRV (ms)",yaxis="y2",line=dict(color="purple",dash="dot")))
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["eda"],mode="lines",name="EDA (µS)",yaxis="y3",line=dict(color="teal",dash="dot")))
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["hydrocortison"],mode="lines",name="Hydrocortison (rel.)",yaxis="y4",line=dict(color="orange")))
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["stress"],mode="lines",name="Stress-index (0-100)",yaxis="y5",line=dict(color="red",width=2)))
+times = [datetime.combine(today,time(0,0,tzinfo=TZ)) + timedelta(minutes=15*i) for i in range(96)]
+hc_conc, glu, hrv_list, eda_list, stress_list = [], [], [], [], []
+
+for t in times:
+    c = pk_predict_conc(doses,t,ka,t_half)
+    hc_conc.append(c)
+    sim = simulate_wearables(t)
+    glu.append(sim["glucose"])
+    hrv_list.append(sim["hrv"])
+    eda_list.append(sim["eda"])
+    s,_ = compute_stress_index(sim["glucose"],sim["hrv"],sim["eda"],profile["baseline_glucose"],profile["baseline_sd"])
+    stress_list.append(s)
+
+df = pd.DataFrame({
+    "tijd": times,
+    "glucose": glu,
+    "hrv": hrv_list,
+    "eda": eda_list,
+    "hydrocortison": hc_conc,
+    "stress": stress_list
+})
+
+# -------- Eerste grafiek: fysiologie + hydrocortison --------
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["glucose"], mode="lines", name="Glucose (mmol/L)",
+    line=dict(color="royalblue")
+))
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["hrv"], mode="lines", name="HRV (ms)",
+    yaxis="y2", line=dict(color="purple", dash="dot")
+))
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["eda"], mode="lines", name="EDA (µS)",
+    yaxis="y2", line=dict(color="teal")
+))
+fig.add_trace(go.Scatter(
+    x=df["tijd"], y=df["hydrocortison"], mode="lines", name="Hydrocortison (rel.)",
+    line=dict(color="orange", dash="dash")
+))
+fig.add_hrect(y0=4, y1=8, fillcolor="green", opacity=0.1, line_width=0)
 
 fig.update_layout(
-    title="Dagelijkse trends: Glucose, HRV, EDA, Hydrocortison & Stress-index",
+    title="Dagelijkse trends: Glucose, HRV, EDA en Hydrocortison",
     xaxis_title="Tijd",
-    yaxis=dict(title="Glucose (mmol/L)",side="left",range=[2,12]),
-    yaxis2=dict(title="HRV (ms)",overlaying="y",side="right",range=[0,80],showgrid=False),
-    yaxis3=dict(title="EDA (µS)",anchor="free",overlaying="y",side="right",position=0.95,range=[0,1.5],showgrid=False),
-    yaxis4=dict(title="Relatieve [HC]",anchor="free",overlaying="y",side="left",position=0.05,range=[0,1.5],showgrid=False),
-    yaxis5=dict(title="Stress-index",anchor="x",overlaying="y",side="right",position=1.05,range=[0,100],showgrid=False),
-    legend=dict(x=0.01,y=0.99)
+    yaxis=dict(title="Glucose / Hydrocortison", side="left"),
+    yaxis2=dict(title="HRV / EDA", overlaying="y", side="right"),
+    legend=dict(x=0.01, y=0.99)
 )
-st.plotly_chart(fig,use_container_width=True)
 
-# ------------------------------------
-# LOGBOEK
-# ------------------------------------
-st.subheader("📒 Logboek")
-if "log" not in st.session_state: st.session_state["log"]=[]
-if st.button("✚ Voeg meting toe aan logboek"):
-    st.session_state["log"].append({
-        "tijd":now.strftime("%Y-%m-%d %H:%M"),
-        "glucose":data["glucose"],
-        "hrv":data["hrv"],
-        "eda":data["eda"],
-        "stress_index":stress_index
-    })
-if st.session_state["log"]:
-    st.table(st.session_state["log"])
+st.plotly_chart(fig, use_container_width=True)
 
-st.caption("⚠️ Educatief hulpmiddel – geen medisch hulpmiddel volgens Verordening (EU) 2017/745 (MDR).")
+# -------- Tweede grafiek: stress-index --------
+fig2 = go.Figure()
+fig2.add_trace(go.Scatter(
+    x=df["tijd"], y=df["stress"], mode="lines+markers",
+    name="Stress-index (0–100)", line=dict(color="red", width=2)
+))
+fig2.update_layout(
+    title="Samengevoegde Stress-index (0–100)",
+    xaxis_title="Tijd",
+    yaxis=dict(title="Stress-index", range=[0,100]),
+    legend=dict(x=0.01, y=0.99)
+)
+st.plotly_chart(fig2, use_container_width=True)
+
