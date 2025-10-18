@@ -1,5 +1,5 @@
 # =========================================================
-# Addison Sense & Dose — CGM × Hydrocortisone Dashboard (EU Prototype)
+# Addison Sense & Dose — Multimodale CGM × HRV × EDA × Hydrocortisone Dashboard
 # =========================================================
 # Educational prototype – not for clinical or diagnostic use (EU MDR Annex I)
 # Author: Cedric Kalhorn — TU Delft / TM12004 Drug Sensing & Delivery
@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 # ------------------------------------
 # CONFIG
 # ------------------------------------
-st.set_page_config(page_title="Addison Sense & Dose — CGM Dashboard", page_icon="🩸", layout="wide")
-st.title("🩸 Addison Sense & Dose — CGM × Hydrocortisone Dashboard")
+st.set_page_config(page_title="Addison Sense & Dose — Multimodal Dashboard", page_icon="🩸", layout="wide")
+st.title("🩸 Addison Sense & Dose — Multimodal CGM × HRV × EDA × Hydrocortisone Dashboard")
 st.caption("Educatief prototype – niet bedoeld als medisch hulpmiddel (EU MDR 2017/745 Annex I).")
 
 TZ = pytz.timezone("Europe/Amsterdam")
@@ -35,13 +35,10 @@ def default_profile():
     }
 
 profile = st.session_state.get("profile", default_profile())
-
-# --- veilige initialisatie van keys (tegen KeyError) ---
 for key, default in default_profile().items():
     if key not in profile:
         profile[key] = default
 
-# --- Sidebar profiel ---
 st.sidebar.header("👤 Profiel")
 profile["name"] = st.sidebar.text_input("Naam", value=profile.get("name",""))
 profile["weight_kg"] = st.sidebar.number_input("Gewicht (kg)",20.0,200.0,float(profile["weight_kg"]),0.5)
@@ -51,64 +48,70 @@ profile["baseline_sd"] = st.sidebar.number_input("SD glucose (mmol/L)",0.1,2.0,f
 st.sidebar.button("Opslaan in sessie",on_click=lambda: st.session_state.update({"profile":profile}))
 
 # ------------------------------------
-# GLUCOSE INVOER / SIMULATIE
+# MULTIMODALE METING (CGM + HRV + EDA)
 # ------------------------------------
-def read_glucose_json(path:str):
-    try:
-        with open(path,"r",encoding="utf-8") as f:
-            d=json.load(f)
-        return {"ts":d.get("timestamp"),"glucose":d.get("glucose_mmol")}
-    except Exception:
-        return None
-
-def simulate_glucose(now_dt:datetime):
+def simulate_wearables(now_dt: datetime):
     hour = now_dt.hour + now_dt.minute/60
-    base = 5.2 + 1.2*math.sin((hour-8)/6*math.pi)
-    noise = random.gauss(0,0.3)
-    if 7<=hour<=9 or 12<=hour<=14 or 18<=hour<=20:
-        base += random.uniform(0.8,2.0)
-    if random.random()<0.05: base -= random.uniform(1.0,2.0)
-    return {"ts":now_dt.isoformat(),"glucose":round(max(2.5,base+noise),1)}
+    # glucose
+    base_g = 5.2 + 1.2 * math.sin((hour-8)/6*math.pi)
+    g = round(max(2.5, base_g + random.gauss(0,0.3)),1)
+    # HRV
+    base_hrv = 45 - 15*math.cos((hour-3)/6*math.pi)
+    hrv = max(5, base_hrv + random.uniform(-6,5))
+    # EDA
+    base_eda = 0.6 + 0.3*math.sin((hour-10)/8*math.pi)
+    eda = round(max(0.2, base_eda + random.gauss(0,0.1)),2)
+    # stress-episode
+    if random.random()<0.05:
+        g -= random.uniform(0.8,1.2)
+        hrv -= random.uniform(8,12)
+        eda += random.uniform(0.3,0.6)
+    return {"glucose":g,"hrv":hrv,"eda":eda,"ts":now_dt.isoformat()}
 
-st.subheader("📊 Glucosemeting")
-colA,colB=st.columns(2)
-with colA:
-    use_sensor = st.checkbox("Automatisch uitlezen CGM-bestand",True)
-    path = st.text_input("Pad naar glucose.json","glucose.json")
-with colB:
-    simulate = st.checkbox("Simuleer CGM-waarden (demo)",True)
-
+st.subheader("⌚ Multimodale meting")
+simulate = st.checkbox("Simuleer CGM + HRV + EDA (demo)", True)
 now = now_local()
-if use_sensor:
-    data = read_glucose_json(path)
+if simulate:
+    data = simulate_wearables(now)
 else:
-    data=None
-if simulate or not data:
-    data = simulate_glucose(now)
+    data = {"glucose":5.6,"hrv":40,"eda":0.5,"ts":now.isoformat()}
 
-glucose = data["glucose"]
-st.metric("Glucose (mmol/L)",glucose)
-st.caption(f"Laatste meting: {data['ts']}")
+st.metric("Glucose (mmol/L)", data["glucose"])
+st.metric("HRV (RMSSD, ms)", int(data["hrv"]))
+st.metric("EDA (µS)", round(data["eda"],2))
+st.caption(f"Laatst gemeten: {data['ts']}")
 
 # ------------------------------------
-# GLUCOSE ANALYSE
+# STRESS-INDEX
 # ------------------------------------
-def classify_glucose(glu:float, base:float, sd:float):
-    if glu < 3.5:
-        return "RED","Hypoglycemie – risico op Addison’s crisis door tekort aan cortisol."
-    elif glu < 4.5:
-        return "AMBER","Lage glucose – mogelijke relatieve hydrocortison-deficiëntie."
-    elif glu > 9:
-        return "AMBER","Hoge glucose – stressrespons of voeding."
-    elif glu > 12:
-        return "RED","Zeer hoge glucose – metabole dysregulatie, contact arts."
-    else:
-        return "GREEN","Glucose binnen fysiologisch bereik."
+def compute_stress_index(glu, hrv, eda, base_glu, base_sd):
+    score = 0; reasons = []
+    if glu < base_glu - 0.5:
+        score += min(40, (base_glu - glu)/base_sd*20)
+        reasons.append("Glucose↓")
+    if hrv < 25:
+        score += 30; reasons.append("HRV↓")
+    elif hrv < 35:
+        score += 15; reasons.append("HRV licht ↓")
+    if eda > 0.8:
+        score += 20; reasons.append("EDA↑")
+    score = max(0,min(100,score))
+    return score, reasons
 
-alert,recommend = classify_glucose(glucose,profile["baseline_glucose"],profile["baseline_sd"])
-if alert=="RED": st.error(f"RED — {recommend}")
-elif alert=="AMBER": st.warning(f"AMBER — {recommend}")
-else: st.success(f"GREEN — {recommend}")
+stress_index, reasons = compute_stress_index(
+    data["glucose"], data["hrv"], data["eda"],
+    profile["baseline_glucose"], profile["baseline_sd"]
+)
+st.subheader("🧠 Samengevoegde stress-index")
+st.metric("Stress-index (0–100)", int(stress_index))
+if reasons:
+    st.caption("Componenten: " + ", ".join(reasons))
+if stress_index>=70:
+    st.error("RED — ernstige stressrespons, mogelijk Addison-deficiëntie")
+elif stress_index>=45:
+    st.warning("AMBER — verhoogde stressrespons, controleer waarden")
+else:
+    st.success("GREEN — binnen normale grenzen")
 
 # ------------------------------------
 # HYDROCORTISON PK-MODEL
@@ -140,38 +143,45 @@ st.caption("Model gebaseerd op orale hydrocortison (bioavail. 95%, Tmax ≈ 1 h)
 # ------------------------------------
 st.subheader("💊 Dosisadvies")
 usual=profile["daily_hc_mg"]
-if alert=="RED":
-    st.write("- **Neem direct 100 mg hydrocortison intramusculair of IV** en bel medische hulp (EU-richtlijn BijnierNET).")
-elif alert=="AMBER":
+if stress_index>=70:
+    st.write("- **Neem direct 100 mg hydrocortison IM/IV** en bel medische hulp (BijnierNET).")
+elif stress_index>=45:
     st.write(f"- **Neem nu extra orale stressdosis:** ca. **{0.5*usual:.1f} mg** (halve dagdosis).")
-    st.write("- Hermeet glucose binnen 30 min; stabilisatie = adequaat effect.")
+    st.write("- Hermeet glucose/HRV binnen 30 min; stabilisatie = adequaat effect.")
 else:
-    st.write("- Geen extra dosis vereist. Blijf CGM-waarden volgen.")
+    st.write("- Geen extra dosis vereist. Blijf waarden monitoren.")
 
 # ------------------------------------
 # DAGELIJKSE TRENDGRAFIEK
 # ------------------------------------
 st.subheader("📈 Dagelijkse trends (simulatie)")
-
 times=[datetime.combine(today,time(0,0,tzinfo=TZ))+timedelta(minutes=15*i) for i in range(96)]
-hc_conc=[]; glu=[]
+hc_conc=[]; glu=[]; hrv_list=[]; eda_list=[]; stress_list=[]
 for t in times:
     c=pk_predict_conc(doses,t,ka,t_half)
     hc_conc.append(c)
-    g=profile["baseline_glucose"] + 0.25*c + random.gauss(0,0.15)
-    if c<0.3 and random.random()<0.2: g-=random.uniform(0.8,1.5)
-    glu.append(max(2.5,round(g,2)))
-df=pd.DataFrame({"tijd":times,"glucose":glu,"hydrocortison":hc_conc})
+    # simulatie glucose/hrv/eda
+    sim=simulate_wearables(t)
+    glu.append(sim["glucose"]); hrv_list.append(sim["hrv"]); eda_list.append(sim["eda"])
+    s,_=compute_stress_index(sim["glucose"],sim["hrv"],sim["eda"],profile["baseline_glucose"],profile["baseline_sd"])
+    stress_list.append(s)
+df=pd.DataFrame({"tijd":times,"glucose":glu,"hrv":hrv_list,"eda":eda_list,"stress":stress_list,"hydrocortison":hc_conc})
 
 fig=go.Figure()
 fig.add_trace(go.Scatter(x=df["tijd"],y=df["glucose"],mode="lines",name="Glucose (mmol/L)",line=dict(color="royalblue")))
-fig.add_hrect(y0=4,y1=8,fillcolor="green",opacity=0.1,line_width=0)
-fig.add_trace(go.Scatter(x=df["tijd"],y=df["hydrocortison"],mode="lines",name="Hydrocortison (rel.)",yaxis="y2",line=dict(color="orange")))
+fig.add_trace(go.Scatter(x=df["tijd"],y=df["hrv"],mode="lines",name="HRV (ms)",yaxis="y2",line=dict(color="purple",dash="dot")))
+fig.add_trace(go.Scatter(x=df["tijd"],y=df["eda"],mode="lines",name="EDA (µS)",yaxis="y3",line=dict(color="teal",dash="dot")))
+fig.add_trace(go.Scatter(x=df["tijd"],y=df["hydrocortison"],mode="lines",name="Hydrocortison (rel.)",yaxis="y4",line=dict(color="orange")))
+fig.add_trace(go.Scatter(x=df["tijd"],y=df["stress"],mode="lines",name="Stress-index (0-100)",yaxis="y5",line=dict(color="red",width=2)))
+
 fig.update_layout(
+    title="Dagelijkse trends: Glucose, HRV, EDA, Hydrocortison & Stress-index",
     xaxis_title="Tijd",
-    yaxis=dict(title="Glucose (mmol/L)",range=[2,12]),
-    yaxis2=dict(title="Relatieve [HC]",overlaying="y",side="right"),
-    title="Dagelijkse glucose- en hydrocortisontrends",
+    yaxis=dict(title="Glucose (mmol/L)",side="left",range=[2,12]),
+    yaxis2=dict(title="HRV (ms)",overlaying="y",side="right",range=[0,80],showgrid=False),
+    yaxis3=dict(title="EDA (µS)",anchor="free",overlaying="y",side="right",position=0.95,range=[0,1.5],showgrid=False),
+    yaxis4=dict(title="Relatieve [HC]",anchor="free",overlaying="y",side="left",position=0.05,range=[0,1.5],showgrid=False),
+    yaxis5=dict(title="Stress-index",anchor="x",overlaying="y",side="right",position=1.05,range=[0,100],showgrid=False),
     legend=dict(x=0.01,y=0.99)
 )
 st.plotly_chart(fig,use_container_width=True)
@@ -184,9 +194,10 @@ if "log" not in st.session_state: st.session_state["log"]=[]
 if st.button("✚ Voeg meting toe aan logboek"):
     st.session_state["log"].append({
         "tijd":now.strftime("%Y-%m-%d %H:%M"),
-        "glucose":glucose,
-        "alert":alert,
-        "advies":recommend
+        "glucose":data["glucose"],
+        "hrv":data["hrv"],
+        "eda":data["eda"],
+        "stress_index":stress_index
     })
 if st.session_state["log"]:
     st.table(st.session_state["log"])
