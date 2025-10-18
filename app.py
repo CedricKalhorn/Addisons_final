@@ -223,3 +223,21 @@ fig2.update_layout(
 )
 st.plotly_chart(fig2, use_container_width=True)
 
+
+# ------------------------------------
+# LOGBOEK
+# ------------------------------------
+st.subheader("📒 Logboek")
+if "log" not in st.session_state: st.session_state["log"]=[]
+if st.button("✚ Voeg meting toe aan logboek"):
+    st.session_state["log"].append({
+        "tijd":now.strftime("%Y-%m-%d %H:%M"),
+        "glucose":data["glucose"],
+        "hrv":data["hrv"],
+        "eda":data["eda"],
+        "stress_index":stress_index
+    })
+if st.session_state["log"]:
+    st.table(st.session_state["log"])
+
+st.caption("⚠️ Educatief hulpmiddel – geen medisch hulpmiddel volgens Verordening (EU) 2017/745 (MDR).")
