@@ -209,6 +209,21 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
+# -------- Nieuwe grafiek: hydrocortison apart --------
+fig_hc = go.Figure()
+fig_hc.add_trace(go.Scatter(
+    x=df["tijd"], y=df["hydrocortison"], mode="lines", name="Hydrocortison (relatieve concentratie)",
+    line=dict(color="orange", width=3)
+))
+fig_hc.update_layout(
+    title="Hydrocortisonconcentratie gedurende de dag",
+    xaxis_title="Tijd",
+    yaxis_title="Relatieve hydrocortisonconcentratie",
+    yaxis=dict(range=[0, max(df["hydrocortison"])*1.2]),
+    legend=dict(x=0.01, y=0.99)
+)
+st.plotly_chart(fig_hc, use_container_width=True)
+
 # -------- Tweede grafiek: stress-index --------
 fig2 = go.Figure()
 fig2.add_trace(go.Scatter(
