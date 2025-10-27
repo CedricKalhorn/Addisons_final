@@ -1,5 +1,5 @@
 fastapi[all]
-streamlit>=1.33
+streamlit
 pandas
 plotly
 pytz
